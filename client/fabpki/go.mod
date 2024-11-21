@@ -1,4 +1,4 @@
-module fieldclimate
+module fabpki
 
 go 1.18
 

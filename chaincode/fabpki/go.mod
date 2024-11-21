@@ -1,4 +1,4 @@
-module github.com/hyperledger/fabric-samples/chaincode/fieldclimate
+module fabpki
 
 go 1.21
 

@@ -24,13 +24,12 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"strconv"
 	"time"
 
-	//these imports are for Hyperledger Fabric interface
-	"github.com/hyperledger/fabric/core/chaincode/shim"
-	sc "github.com/hyperledger/fabric/protos/peer"
+	"github.com/hyperledger/fabric-contract-api-go/contractapi"
 )
 
 /* All the following functions are used to implement fabpki chaincode. This chaincode
@@ -46,7 +45,9 @@ basically works with 2 main features:
 
 // SmartContract defines the chaincode base structure. All the methods are implemented to
 // return a SmartContrac type.
+// SmartContract provides functions for managing a car
 type SmartContract struct {
+	contractapi.Contract
 }
 
 // ECDSASignature represents the two mathematical components of an ECDSA signature once
@@ -81,65 +82,26 @@ func PublicKeyDecodePEM(pemEncodedPub string) ecdsa.PublicKey {
 // Note that chaincode upgrade also calls this function to reset
 // or to migrate data, so be careful to avoid a scenario where you
 // inadvertently clobber your ledger's data!
-func (s *SmartContract) Init(stub shim.ChaincodeStubInterface) sc.Response {
-	return shim.Success(nil)
-}
-
-// Invoke function is called on each transaction invoking the chaincode. It
-// follows a structure of switching calls, so each valid feature need to
-// have a proper entry-point.
-func (s *SmartContract) Invoke(stub shim.ChaincodeStubInterface) sc.Response {
-	// extract the function name and args from the transaction proposal
-	fn, args := stub.GetFunctionAndParameters()
-
-	//implements a switch for each acceptable function
-	if fn == "registerMeter" {
-		//registers a new meter into the ledger
-		return s.registerMeter(stub, args)
-
-	} else if fn == "checkSignature" {
-		//inserts a measurement which increases the meter consumption counter. The measurement
-		return s.checkSignature(stub, args)
-
-	} else if fn == "sleepTest" {
-		//retrieves the accumulated consumption
-		return s.sleepTest(stub, args)
-
-	} else if fn == "countHistory" {
-		//look for a specific fill up record and brings its changing history
-		return s.countHistory(stub, args)
-
-	} else if fn == "countLedger" {
-		//look for a specific fill up record and brings its changing history
-		return s.countLedger(stub)
-
-	} else if fn == "queryLedger" {
-		//execute a CouchDB query, args must include query expression
-		return s.queryLedger(stub, args)
-	}
-
-	//function fn not implemented, notify error
-	return shim.Error("Chaincode does not support this function.")
-}
 
 /*
-	SmartContract::registerMeter(...)
-	Does the register of a new meter into the ledger.
-	The meter is the base of the key|value structure.
-	The key constitutes the meter ID.
-	- args[0] - meter ID
-	- args[1] - the public key associated with the meter
+SmartContract::registerMeter(...)
+Does the register of a new meter into the ledger.
+The meter is the base of the key|value structure.
+The key constitutes the meter ID.
+- args[0] - meter ID
+- args[1] - the public key associated with the meter
 */
-func (s *SmartContract) registerMeter(stub shim.ChaincodeStubInterface, args []string) sc.Response {
+
+func (s *SmartContract) RegisterMeter(ctx contractapi.TransactionContextInterface, meterid string, strpubkey string) error {
 
 	//validate args vector lenght
-	if !(len(args) == 2 || len(args) == 3) {
-		return shim.Error("It was expected the parameters: <meter id> <public key> [encrypted inital consumption]")
-	}
+	// if !(len(args) == 2 || len(args) == 3) {
+	// 	return fmt.Errorf("it was expected the parameters: <meter id> <public key> [encrypted inital consumption]")
+	// }
 
 	//gets the parameters associated with the meter ID and the public key (in PEM format)
-	meterid := args[0]
-	strpubkey := args[1]
+	// meterid := args[0]
+	// strpubkey := args[1]
 
 	//creates the meter record with the respective public key
 	var meter = Meter{PubKey: strpubkey}
@@ -148,58 +110,43 @@ func (s *SmartContract) registerMeter(stub shim.ChaincodeStubInterface, args []s
 	meterAsBytes, _ := json.Marshal(meter)
 
 	//registers meter in the ledger
-	stub.PutState(meterid, meterAsBytes)
-
-	//loging...
 	fmt.Println("Registering meter: ", meter)
-
-	//notify procedure success
-	return shim.Success(nil)
+	return ctx.GetStub().PutState(meterid, meterAsBytes)
 }
 
 /*
-	This method implements the insertion of encrypted measurements in the blockchain.
-	The encryptation must uses the same public key configured to the meter.
-	Notice that the informed measurement will be added (accumulated) to the the previous
-	encrypted measurement consumption information.
-	The vector args[] must contain two parameters:
-	- args[0] - meter ID
-	- args[1] - the legally relevant information, in a string representing a big int number.
-	- args[2] - the signature digest, in base64 encode format.
+This method implements the insertion of encrypted measurements in the blockchain.
+The encryptation must uses the same public key configured to the meter.
+Notice that the informed measurement will be added (accumulated) to the the previous
+encrypted measurement consumption information.
+The vector args[] must contain two parameters:
+- args[0] - meter ID
+- args[1] - the legally relevant information, in a string representing a big int number.
+- args[2] - the signature digest, in base64 encode format.
 */
-func (s *SmartContract) checkSignature(stub shim.ChaincodeStubInterface, args []string) sc.Response {
-
-	//validate args vector lenght
-	if len(args) != 3 {
-		return shim.Error("It was expected 3 parameter: <meter ID> <information> <signature>")
-	}
-
-	//gets the parameter associated with the meter ID and the digital signature
-	meterid := args[0]
-	info := args[1]
-	sign := args[2]
+func (s *SmartContract) CheckSignature(ctx contractapi.TransactionContextInterface, meterid string, info string, sign string) error {
 
 	//loging...
 	fmt.Println("Testing args: ", meterid, info, sign)
+	fmt.Println("Meter ID: ", meterid)
+	fmt.Println("Information: ", info)
 
-	//retrive meter record
-	meterAsBytes, err := stub.GetState(meterid)
+	// extrai o registro do medidor
+	meterAsBytes, err := ctx.GetStub().GetState(meterid)
 
 	//test if we receive a valid meter ID
 	if err != nil || meterAsBytes == nil {
-		return shim.Error("Error on retrieving meter ID register")
+		return fmt.Errorf("error on retrieving meter ID register")
 	}
 
-	//creates Meter struct to manipulate returned bytes
+	//cria estrutura para manipular os bytes do medidor
 	MyMeter := Meter{}
 
 	//loging...
 	fmt.Println("Retrieving meter bytes: ", meterAsBytes)
 
-	//convert bytes into a Meter object
+	// decodifica os bytes do medidor para a estrutura
 	json.Unmarshal(meterAsBytes, &MyMeter)
-
-	//decode de public key to the internal format
 	pubkey := PublicKeyDecodePEM(MyMeter.PubKey)
 
 	//loging...
@@ -208,22 +155,24 @@ func (s *SmartContract) checkSignature(stub shim.ChaincodeStubInterface, args []
 	//calculates the information hash
 	hash := sha256.Sum256([]byte(info))
 
-	//now we decode the signature to extract the DER-encoded byte string
+	//decodifica a assinatura para extrair a string de bytes codificada em DER
 	der, err := base64.StdEncoding.DecodeString(sign)
 	if err != nil {
-		return shim.Error("Error on decode the digital signature")
+		return fmt.Errorf("error on decode the digital signature: %v", err)
 	}
 
-	//creates a signature data structure
+	//cria uma estrutura de dados para armazenar a assinatura
 	sig := &ECDSASignature{}
 
 	//unmarshal the R and S components of the ASN.1-encoded signature
+	//deserializa os componentes R e S da assinatura codificada em ASN.1
 	_, err = asn1.Unmarshal(der, sig)
 	if err != nil {
-		return shim.Error("Error on get R and S terms from the digital signature")
+		return fmt.Errorf("error on get R and S terms from the digital signature: %v", err)
 	}
 
 	//validates de digital signature
+	//valida a assinatura digital
 	valid := ecdsa.Verify(&pubkey, hash[:], sig.R, sig.S)
 
 	// buffer is a JSON array containing records
@@ -234,27 +183,32 @@ func (s *SmartContract) checkSignature(stub shim.ChaincodeStubInterface, args []
 	buffer.WriteString("]")
 
 	//notify procedure success
-	return shim.Success(buffer.Bytes())
+	log.Printf("Signature verified: %t\n", valid)
+	// print buffer
+	log.Print(buffer.String())
+
+	// return success
+	return nil
 }
 
 /*
-	This method is a dummy test that makes the endorser "sleep" for some seconds.
-	It is usefull to check either the sleeptime affects the performance of concurrent
-	transactions.
-	- args[0] - sleeptime (in seconds)
+This method is a dummy test that makes the endorser "sleep" for some seconds.
+It is usefull to check either the sleeptime affects the performance of concurrent
+transactions.
+- args[0] - sleeptime (in seconds)
 */
-func (s *SmartContract) sleepTest(stub shim.ChaincodeStubInterface, args []string) sc.Response {
+func (s *SmartContract) SleepTest(ctx contractapi.TransactionContextInterface, sleeptimestr string) error {
 	//validate args vector lenght
-	if len(args) != 1 {
-		return shim.Error("It was expected 1 parameter: <sleeptime>")
-	}
+	// if len(args) != 1 {
+	// 	return fmt.Errorf("it was expected 1 parameter: <sleeptime>")
+	// }
 
 	//gets the parameter associated with the meter ID and the incremental measurement
-	sleeptime, err := strconv.Atoi(args[0])
+	sleeptime, err := strconv.Atoi(sleeptimestr)
 
 	//test if we receive a valid meter ID
 	if err != nil {
-		return shim.Error("Error on retrieving sleep time")
+		return fmt.Errorf("error on retrieving sleep time")
 	}
 
 	//tests if sleeptime is a valid value
@@ -264,27 +218,27 @@ func (s *SmartContract) sleepTest(stub shim.ChaincodeStubInterface, args []strin
 	}
 
 	//return payload with bytes related to the meter state
-	return shim.Success(nil)
+	return nil
 }
 
 /*
-   This method brings the changing history of a specific meter asset. It can be useful to
-   query all the changes that happened with a meter value.
-   - args[0] - asset key (or meter ID)
+This method brings the changing history of a specific meter asset. It can be useful to
+query all the changes that happened with a meter value.
+- args[0] - asset key (or meter ID)
 */
-func (s *SmartContract) queryHistory(stub shim.ChaincodeStubInterface, args []string) sc.Response {
+func (s *SmartContract) QueryHistory(ctx contractapi.TransactionContextInterface, key string) error {
 
 	//validate args vector lenght
-	if len(args) != 1 {
-		return shim.Error("It was expected 1 parameter: <key>")
-	}
+	// if len(args) != 1 {
+	// 	return fmt.Errorf("it was expected 1 parameter: <key>")
+	// }
 
-	historyIer, err := stub.GetHistoryForKey(args[0])
+	historyIer, err := ctx.GetStub().GetHistoryForKey(key)
 
 	//verifies if the history exists
 	if err != nil {
 		//fmt.Println(errMsg)
-		return shim.Error("Fail on getting ledger history")
+		return fmt.Errorf("fail on getting ledger history")
 	}
 
 	// buffer is a JSON array containing records
@@ -296,10 +250,10 @@ func (s *SmartContract) queryHistory(stub shim.ChaincodeStubInterface, args []st
 		//increments iterator
 		queryResponse, err := historyIer.Next()
 		if err != nil {
-			return shim.Error(err.Error())
+			return fmt.Errorf(err.Error())
 		}
 		// Add a comma before array members, suppress it for the first array member
-		if bArrayMemberAlreadyWritten == true {
+		if bArrayMemberAlreadyWritten {
 			buffer.WriteString(",")
 		}
 
@@ -322,42 +276,42 @@ func (s *SmartContract) queryHistory(stub shim.ChaincodeStubInterface, args []st
 	historyIer.Close()
 
 	//loging...
-	fmt.Printf("Consulting ledger history, found %d\n records", counter)
+	log.Printf("Consulting ledger history, found %d\n records", counter)
+	log.Print(buffer.String())
 
 	//notify procedure success
-	return shim.Success(buffer.Bytes())
+	return nil
 }
 
 /*
-   This method brings the number of times that a meter asset was modified in the ledger.
-   It performs faster than queryHistory() method once it does not retrive any information,
-   it only counts the changes.
-   - args[0] - asset key (or meter ID)
+This method brings the number of times that a meter asset was modified in the ledger.
+It performs faster than queryHistory() method once it does not retrive any information,
+it only counts the changes.
+- args[0] - asset key (or meter ID)
 */
-func (s *SmartContract) countHistory(stub shim.ChaincodeStubInterface, args []string) sc.Response {
+func (s *SmartContract) CountHistory(ctx contractapi.TransactionContextInterface, key string) error {
 
 	//validate args vector lenght
-	if len(args) != 1 {
-		return shim.Error("It was expected 1 parameter: <key>")
-	}
+	// if len(args) != 1 {
+	// 	return fmt.Errorf("it was expected 1 parameter: <key>")
+	// }
 
-	historyIer, err := stub.GetHistoryForKey(args[0])
+	historyIer, err := ctx.GetStub().GetHistoryForKey(key)
 
 	//verifies if the history exists
 	if err != nil {
 		//fmt.Println(errMsg)
-		return shim.Error("Fail on getting ledger history")
+		return fmt.Errorf("fail on getting ledger history")
 	}
 
 	//creates a counter
-	var counter int64
-	counter = 0
+	var counter int64 = 0
 
 	for historyIer.HasNext() {
 		//increments iterator
 		_, err := historyIer.Next()
 		if err != nil {
-			return shim.Error(err.Error())
+			return fmt.Errorf(err.Error())
 		}
 
 		//increases counter
@@ -376,20 +330,20 @@ func (s *SmartContract) countHistory(stub shim.ChaincodeStubInterface, args []st
 
 	//loging...
 	fmt.Printf("Consulting ledger history, found %d\n records", counter)
+	log.Print(buffer.String())
 
-	//notify procedure success
-	return shim.Success(buffer.Bytes())
+	return nil
 }
 
 /*
-   This method counts the total of well succeeded transactions in the ledger.
+This method counts the total of well succeeded transactions in the ledger.
 */
-func (s *SmartContract) countLedger(stub shim.ChaincodeStubInterface) sc.Response {
+func (s *SmartContract) CountLedger(ctx contractapi.TransactionContextInterface) error {
 
 	//use a range of keys, assuming that the max key value is 999999,
-	resultsIterator, err := stub.GetStateByRange("0", "999999")
+	resultsIterator, err := ctx.GetStub().GetStateByRange("0", "999999")
 	if err != nil {
-		return shim.Error(err.Error())
+		return fmt.Errorf(err.Error())
 	}
 
 	//defer iterator closes at the end of the function
@@ -407,16 +361,16 @@ func (s *SmartContract) countLedger(stub shim.ChaincodeStubInterface) sc.Respons
 		//increments iterator
 		queryResponse, err := resultsIterator.Next()
 		if err != nil {
-			return shim.Error(err.Error())
+			return fmt.Errorf(err.Error())
 		}
 
 		//busca historico da proxima key
-		historyIer, err := stub.GetHistoryForKey(queryResponse.Key)
+		historyIer, err := ctx.GetStub().GetHistoryForKey(queryResponse.Key)
 
 		//verifies if the history exists
 		if err != nil {
 			//fmt.Println(errMsg)
-			return shim.Error(err.Error())
+			return fmt.Errorf(err.Error())
 		}
 
 		defer historyIer.Close()
@@ -425,7 +379,7 @@ func (s *SmartContract) countLedger(stub shim.ChaincodeStubInterface) sc.Respons
 			//increments iterator
 			_, err := historyIer.Next()
 			if err != nil {
-				return shim.Error(err.Error())
+				return fmt.Errorf(err.Error())
 			}
 
 			//increases counter
@@ -445,35 +399,36 @@ func (s *SmartContract) countLedger(stub shim.ChaincodeStubInterface) sc.Respons
 	buffer.WriteString("]")
 
 	//loging...
-	fmt.Printf("Consulting ledger history, found %d transactions in %d keys\n", counter, keys)
+	log.Printf("Consulting ledger history, found %d transactions in %d keys\n", counter, keys)
+	log.Print(buffer.String())
 
 	//notify procedure success
-	return shim.Success(buffer.Bytes())
+	return nil
 }
 
 /*
-   This method executes a free query on the ledger, returning a vector of meter assets.
-   The query string must be a query expression supported by CouchDB servers.
-   - args[0] - query string.
+This method executes a free query on the ledger, returning a vector of meter assets.
+The query string must be a query expression supported by CouchDB servers.
+- args[0] - query string.
 */
-func (s *SmartContract) queryLedger(stub shim.ChaincodeStubInterface, args []string) sc.Response {
+func (s *SmartContract) QueryLedger(ctx contractapi.TransactionContextInterface, queryString string) error {
 
 	//validate args vector lenght
-	if len(args) != 1 {
-		return shim.Error("It was expected 1 parameter: <query string>")
-	}
+	// if len(args) != 1 {
+	// 	return fmt.Errorf("it was expected 1 parameter: <query string>")
+	// }
 
 	//using auxiliar variable
-	queryString := args[0]
+	// queryString := args[0]
 
 	//loging...
 	fmt.Printf("Executing the following query: %s\n", queryString)
 
 	//try to execute query and obtain records iterator
-	resultsIterator, err := stub.GetQueryResult(queryString)
+	resultsIterator, err := ctx.GetStub().GetQueryResult(queryString)
 	//test if iterator is valid
 	if err != nil {
-		return shim.Error(err.Error())
+		return fmt.Errorf(err.Error())
 	}
 	//defer iterator closes at the end of the function
 	defer resultsIterator.Close()
@@ -486,10 +441,10 @@ func (s *SmartContract) queryLedger(stub shim.ChaincodeStubInterface, args []str
 		//increments iterator
 		queryResponse, err := resultsIterator.Next()
 		if err != nil {
-			return shim.Error(err.Error())
+			return fmt.Errorf(err.Error())
 		}
 		// Add a comma before array members, suppress it for the first array member
-		if bArrayMemberAlreadyWritten == true {
+		if bArrayMemberAlreadyWritten {
 			buffer.WriteString(",")
 		}
 
@@ -508,9 +463,29 @@ func (s *SmartContract) queryLedger(stub shim.ChaincodeStubInterface, args []str
 
 	//loging...
 	fmt.Printf("Obtained the following fill up records: %s\n", buffer.String())
+	log.Print(buffer.String())
 
 	//notify procedure success
-	return shim.Success(buffer.Bytes())
+	return nil
+}
+
+// Public method to meet the requirement
+func (s *SmartContract) GetMeter(ctx contractapi.TransactionContextInterface, meterID string) (*Meter, error) {
+	meterAsBytes, err := ctx.GetStub().GetState(meterID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read from world state: %v", err)
+	}
+	if meterAsBytes == nil {
+		return nil, fmt.Errorf("meter %s does not exist", meterID)
+	}
+
+	meter := new(Meter)
+	err = json.Unmarshal(meterAsBytes, meter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal meter: %v", err)
+	}
+
+	return meter, nil
 }
 
 /*
@@ -520,8 +495,15 @@ func main() {
 
 	////////////////////////////////////////////////////////
 	// USE THIS BLOCK TO COMPILE THE CHAINCODE
-	if err := shim.Start(new(SmartContract)); err != nil {
-		fmt.Printf("Error starting SmartContract chaincode: %s\n", err)
+	chaincode, err := contractapi.NewChaincode(new(SmartContract))
+
+	if err != nil {
+		fmt.Printf("error create fabpki chaincode: %s", err.Error())
+		return
+	}
+
+	if err := chaincode.Start(); err != nil {
+		fmt.Printf("error starting fabpki chaincode: %s", err.Error())
 	}
 	////////////////////////////////////////////////////////
 
