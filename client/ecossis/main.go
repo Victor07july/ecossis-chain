@@ -1,20 +1,13 @@
 package main
 
 import (
-	"crypto/ecdsa"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/asn1"
-	"encoding/base64"
-	"encoding/pem"
+	"ecossis/microservices"
 	"fmt"
-	"math/big"
-	mathrand "math/rand"
 	"os"
 	"time"
 
-	"fabpki/modules"
+	mathrand "math/rand"
 
 	mspclient "github.com/hyperledger/fabric-sdk-go/pkg/client/msp"
 	"github.com/hyperledger/fabric-sdk-go/pkg/core/config"
@@ -24,7 +17,42 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// Struct para armazenar os dados do arquivo JSON e o hash
+type FileData struct {
+	ID          int    `json:"id"`
+	Timestamp   string `json:"timestamp"`
+	Geolocation string `json:"geolocation"`
+	Hash        string `json:"hash"`
+}
+
 func main() {
+	// Gerar dados mock aleatórios e escrever em um arquivo JSON
+	mockData := microservices.GenerateMockData()
+	err := microservices.WriteMockDataToFile("json/mock_data.json", mockData)
+	if err != nil {
+		fmt.Println("Error writing mock data to file:", err)
+	} else {
+		fmt.Println("Mock data written to mock_data.json")
+	}
+
+	// Processar o arquivo JSON localmente e gerar um hash
+	hash, err := microservices.ProcessLocalJSON("json/mock_data.json")
+	if err != nil {
+		fmt.Println("Error processing local JSON file:", err)
+		return
+	}
+
+	// Ler os dados do arquivo JSON
+	var fileData FileData
+	fileData.ID = mockData.ID
+	fileData.Timestamp = mockData.Timestamp
+	fileData.Geolocation = mockData.Geolocation
+	fileData.Hash = hash
+
+	fmt.Printf("File Data: %+v\n", fileData)
+
+	/* ///// CONEXÃO COM A BLOCKCHAIN ///// */
+
 	configFilePath := "connection-org.yaml"
 	channelName := "demo"
 	mspID := "INMETROMSP"
@@ -36,44 +64,11 @@ func main() {
 	}
 	log.SetOutput(file)
 
-	meterID := "INMETRO"
-	//gera par de chaves e salva na pasta data
-	if err := modules.GenerateKeyPair(meterID); err != nil {
-		fmt.Println("Error generating key pair:", err)
-		os.Exit(1)
-	}
-
-	// leitura da chave pública
-	pubKeyFile := meterID + ".pub"
-	pubKeyPath := fmt.Sprintf("data/%s", pubKeyFile)
-	pubKeyBytes, err := os.ReadFile(pubKeyPath)
-	if err != nil {
-		fmt.Println("Error reading public key file:", err)
-		os.Exit(1)
-	}
-	pubKey := string(pubKeyBytes)
-
-	fmt.Println("Public Key:", string(pubKey))
-
 	enrollID := randomString(10)
 	registerEnrollUser(configFilePath, enrollID, mspID)
 
-	// create data directory if it doesn't exist
-	// if err := os.MkdirAll("data", os.ModePerm); err != nil {
-	//     fmt.Println("Error creating data directory:", err)
-	//     os.Exit(1)
-	// }
-
-	// armazena medidor com a chave publica
-	invokeCCgw(configFilePath, channelName, enrollID, mspID, chaincodeName, "registerMeter", []string{meterID, pubKey})
-
-	// a função signMessage obtem a chave privada do medidor e realiza uma assinatura digital da mensagem
-	message := "123kWh"
-	b64sig, err := signMessage(meterID, message)
-	invokeCCgw(configFilePath, channelName, enrollID, mspID, chaincodeName, "checkSignature", []string{meterID, message, b64sig})
-
-
-	_ = b64sig // remove this line after implementing the checkSignature function
+	invokeCCgw(configFilePath, channelName, enrollID, mspID, chaincodeName, "test", []string{"a"})
+	invokeCCgw(configFilePath, channelName, enrollID, mspID, chaincodeName, "qtest", []string{"a"})
 }
 
 func registerEnrollUser(configFilePath, enrollID, mspID string) {
@@ -211,44 +206,4 @@ func randomString(length int) string {
 	b := make([]byte, length)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)[:length]
-}
-
-func signMessage(meterID string, message string) (string, error) {
-	// leitura da chave privada
-	privKeyFile := meterID + ".priv"
-	privKeyPath := fmt.Sprintf("data/%s", privKeyFile)
-	privKeyBytes, err := os.ReadFile(privKeyPath)
-	if err != nil {
-		return "", err
-	}
-	block, _ := pem.Decode(privKeyBytes)
-	if block == nil || block.Type != "EC PRIVATE KEY" {
-		return "", fmt.Errorf("failed to decode PEM block containing private key")
-	}
-
-	privKey, err := x509.ParseECPrivateKey(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse EC private key: %v", err)
-	}
-
-	hashed := sha256.Sum256([]byte(message))
-
-	// Assinar a mensagem usando a chave privada
-	r, s, err := ecdsa.Sign(rand.Reader, privKey, hashed[:])
-	if err != nil {
-		return "", fmt.Errorf("Erro ao assinar a mensagem: %v", err)
-	}
-
-	// Codificar a assinatura em DER
-	signature, err := asn1.Marshal(struct {
-		R, S *big.Int
-	}{r, s})
-	if err != nil {
-		return "", fmt.Errorf("Erro ao codificar a assinatura em DER: %v", err)
-	}
-
-	// Codificar a assinatura em Base64
-	b64sig := base64.StdEncoding.EncodeToString(signature)
-
-	return b64sig, nil
 }

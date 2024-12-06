@@ -145,7 +145,7 @@ func (s *SmartContract) CheckSignature(ctx contractapi.TransactionContextInterfa
 	//loging...
 	fmt.Println("Retrieving meter bytes: ", meterAsBytes)
 
-	// decodifica os bytes do medidor para a estrutura
+	// decodifica os bytes do medidor para a estrutura e obtem a chave publica
 	json.Unmarshal(meterAsBytes, &MyMeter)
 	pubkey := PublicKeyDecodePEM(MyMeter.PubKey)
 
@@ -171,7 +171,6 @@ func (s *SmartContract) CheckSignature(ctx contractapi.TransactionContextInterfa
 		return fmt.Errorf("error on get R and S terms from the digital signature: %v", err)
 	}
 
-	//validates de digital signature
 	//valida a assinatura digital
 	valid := ecdsa.Verify(&pubkey, hash[:], sig.R, sig.S)
 
@@ -182,7 +181,7 @@ func (s *SmartContract) CheckSignature(ctx contractapi.TransactionContextInterfa
 	buffer.WriteString(strconv.FormatBool(valid))
 	buffer.WriteString("]")
 
-	//notify procedure success
+	// notifica o resultado. caso seja true, a mensagem foi assinada corretamente e não foi adulterada
 	log.Printf("Signature verified: %t\n", valid)
 	// print buffer
 	log.Print(buffer.String())
